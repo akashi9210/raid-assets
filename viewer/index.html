@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><title>Raid Asset Viewer</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--bg:#16181c;--panel:#1e2127;--line:#2e333b;--fg:#d6d9de;--dim:#8b929c;--acc:#e0a030}
+*{box-sizing:border-box}
+body{margin:0;height:100vh;display:flex;background:var(--bg);color:var(--fg);font:13px system-ui,sans-serif}
+#side{width:340px;min-width:220px;display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--line)}
+#bar{padding:8px;display:flex;gap:6px;border-bottom:1px solid var(--line)}
+#bar button{flex:1;padding:6px;background:#2a2e36;border:1px solid var(--line);color:var(--fg);cursor:pointer;border-radius:4px}
+#bar button.on{background:var(--acc);color:#111;border-color:var(--acc)}
+#q{margin:8px;padding:6px 8px;background:#12141a;border:1px solid var(--line);color:var(--fg);border-radius:4px}
+#cnt{padding:0 10px 6px;color:var(--dim);font-size:12px}
+#tree{flex:1;overflow:auto;padding:0 4px 8px;font-size:12.5px}
+.row{white-space:nowrap;cursor:pointer;padding:1px 4px;border-radius:3px;overflow:hidden;text-overflow:ellipsis}
+.row:hover{background:#2a2e36}.row.sel{background:#3a3220;color:var(--acc)}
+.dir{color:#9fc4ff}.dir::before{content:"\25B8 ";color:var(--dim)}.dir.open::before{content:"\25BE "}
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#top{padding:6px 12px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+#title{font-weight:600;word-break:break-all;flex:1;min-width:160px}
+#top label,#top button,#top a{color:var(--fg);font-size:12px}
+button,select{background:#2a2e36;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 7px;cursor:pointer;font-size:12px}
+a{color:var(--acc)}
+#cfg{display:none;padding:6px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap;gap:6px 14px;align-items:center;background:#1a1d22}
+#cfg label{display:flex;gap:5px;align-items:center;color:var(--dim);font-size:12px}
+#cfg select{max-width:210px}
+#views{flex:1;display:flex;min-height:0}
+#pane1{flex:1;position:relative;overflow:auto;min-width:0;
+ background:repeating-conic-gradient(#20232a 0 25%,#1a1c22 0 50%) 0 0/20px 20px}
+#pane1 img.tex{display:block;margin:auto}
+#pane1 canvas,#v2 canvas{position:absolute;inset:0;width:100%;height:100%}
+#msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);pointer-events:none;text-align:center;padding:20px}
+#pane2{display:none;width:48%;min-width:280px;flex-direction:column;border-left:2px solid var(--acc);background:var(--panel)}
+#v2{flex:1;position:relative;min-height:160px;background:#23262d}
+#info{height:46%;overflow:auto;padding:8px 12px;font-size:12px;border-top:1px solid var(--line)}
+#info h4{margin:10px 0 4px;color:var(--acc);font-size:12px}
+#info table{border-collapse:collapse;width:100%}
+#info td,#info th{border-bottom:1px solid #2a2e36;padding:2px 6px 2px 0;text-align:left;vertical-align:top;word-break:break-all}
+#info th{color:var(--dim);font-weight:500;white-space:nowrap}
+#info pre{white-space:pre-wrap;background:#14161a;padding:6px;max-height:220px;overflow:auto;font-size:11px}
+#info img{width:56px;height:56px;object-fit:cover;border:1px solid var(--line);margin-right:4px;background:#000;vertical-align:middle}
+#p2bar{display:flex;gap:8px;align-items:center;padding:5px 10px;border-bottom:1px solid var(--line)}
+#p2bar select{flex:1;min-width:0}
+</style></head><body>
+<div id="side">
+ <div id="bar"><button id="bt" class="on">Texturen</button><button id="bm">Modelle</button><button id="bw">Waffen</button></div>
+ <input id="q" placeholder="Suchen (z.B. kubelwagen)  -  Enter">
+ <div id="cnt"></div><div id="tree"></div>
+</div>
+<div id="main">
+ <div id="top"><span id="title">Nichts ausgewaehlt</span><span id="tools"></span></div>
+ <div id="cfg"></div>
+ <div id="views">
+  <div id="pane1"><div id="msg">Links eine Datei waehlen</div></div>
+  <div id="pane2"><div id="p2bar"><select id="p2sel"></select><button id="p2close">x</button></div><div id="v2"></div><div id="info"></div></div>
+ </div>
+</div>
+<script src="/static/three.min.js"></script>
+<script src="/static/OrbitControls.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+let kind='texture',data={texture:null,model:null,weapon:null},filter='';
+const pane1=$('#pane1'),msg=$('#msg'),tools=$('#tools'),cfg=$('#cfg'),pane2=$('#pane2');
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+/* ---------- Liste ---------- */
+async function load(k){
+  if(!data[k]){$('#cnt').textContent='Lade ...';
+    data[k]=k==='weapon'?(await (await fetch('/api/weapons')).json()).map(n=>[n,n.replace(/^wpn_fps_/,'')]):await (await fetch('/api/list/'+k)).json();}
+  render();
+}
+function buildTree(items){
+  const root={d:{},f:[]};
+  for(const [id,p] of items){
+    const parts=p.split('/');let n=root;
+    for(let i=0;i<parts.length-1;i++){n=n.d[parts[i]]||(n.d[parts[i]]={d:{},f:[]});}
+    n.f.push([id,parts[parts.length-1],p]);
+  }
+  return root;
+}
+function render(){
+  const all=data[kind]||[];const f=filter.toLowerCase();
+  const items=f?all.filter(x=>x[1].toLowerCase().includes(f)):all;
+  $('#cnt').textContent=items.length+' von '+all.length;
+  const tree=$('#tree');tree.innerHTML='';
+  const root=buildTree(items);const open=!!f&&items.length<400;
+  (function walk(n,el,depth){
+    for(const name of Object.keys(n.d).sort()){
+      const row=document.createElement('div');row.className='row dir'+(open?' open':'');
+      row.style.paddingLeft=depth*14+4+'px';row.textContent=name;
+      const box=document.createElement('div');box.style.display=open?'block':'none';
+      let built=false;const fill=()=>{if(!built){built=true;walk(n.d[name],box,depth+1);}};
+      if(open)fill();
+      row.onclick=()=>{const o=box.style.display==='none';box.style.display=o?'block':'none';row.classList.toggle('open',o);if(o)fill();};
+      el.append(row,box);
+    }
+    for(const [id,name,p] of n.f.sort((a,b)=>a[1]<b[1]?-1:1)){
+      const row=document.createElement('div');row.className='row';row.style.paddingLeft=depth*14+4+'px';
+      row.textContent=name;row.title=p;
+      row.onclick=()=>{document.querySelectorAll('.sel').forEach(e=>e.classList.remove('sel'));row.classList.add('sel');show(id,p);};
+      el.append(row);
+    }
+  })(root,$('#tree'),0);
+}
+function clearView(){
+  stopViewers();pane1.querySelectorAll('img.tex,canvas').forEach(e=>e.remove());tools.innerHTML='';cfg.style.display='none';cfg.innerHTML='';
+  pane2.style.display='none';msg.textContent='';msg.style.display='flex';
+}
+function show(id,p){$('#title').textContent=p;clearView();kind==='texture'?showTex(id,p):kind==='weapon'?showWeapon(id):showModel(id,p);}
+
+/* ---------- Textur ---------- */
+let img=null,zoom=1,chan='rgba';
+function showTex(id,p){
+  tools.innerHTML=`<select id="ch"><option value="rgba">RGBA</option><option value="rgb">RGB</option><option value="a">Alpha</option><option value="r">R</option><option value="g">G</option><option value="b">B</option></select>
+  <button id="fit">Einpassen</button><button id="one">100%</button> <span id="inf" style="color:var(--dim)"></span> <a href="/api/raw/${id}">DDS</a>`;
+  $('#ch').value=chan;$('#ch').onchange=e=>{chan=e.target.value;load_();};
+  $('#fit').onclick=fit;$('#one').onclick=()=>setZoom(1);
+  load_();
+  async function load_(){
+    msg.textContent='Lade ...';msg.style.display='flex';
+    const r=await fetch('/api/texture/'+id+'?c='+chan);
+    if(!r.ok){msg.textContent=await r.text();return;}
+    const info=JSON.parse(r.headers.get('X-Info'));$('#inf').textContent=info.w+' x '+info.h;
+    const url=URL.createObjectURL(await r.blob());
+    pane1.querySelectorAll('img.tex').forEach(e=>e.remove());
+    img=new Image();img.className='tex';img.onload=()=>{msg.style.display='none';fit();};img.src=url;pane1.append(img);
+  }
+}
+function setZoom(z){zoom=z;img.style.width=img.naturalWidth*z+'px';img.style.height=img.naturalHeight*z+'px';
+  img.style.margin=(img.naturalWidth*z<pane1.clientWidth||img.naturalHeight*z<pane1.clientHeight)?'auto':'0';}
+function fit(){setZoom(Math.min(pane1.clientWidth/img.naturalWidth,pane1.clientHeight/img.naturalHeight,1));}
+pane1.addEventListener('wheel',e=>{if(kind!=='texture'||!img)return;e.preventDefault();setZoom(Math.max(.02,Math.min(16,zoom*(e.deltaY<0?1.15:1/1.15))));},{passive:false});
+
+/* ---------- 3D ---------- */
+const flags={wire:false,tex:true,nm:true,nmflip:true};
+const texCache={};
+function getTex(id,isNm){
+  const key=id+(isNm?'n':'d');
+  if(!texCache[key]){
+    const t=new THREE.TextureLoader().load('/api/texture/'+id+'?c=rgb&s=2048');
+    t.wrapS=t.wrapT=THREE.RepeatWrapping;t.encoding=isNm?THREE.LinearEncoding:THREE.sRGBEncoding;t.anisotropy=8;texCache[key]=t;
+  }
+  return texCache[key];
+}
+const viewers=[];
+function stopViewers(){while(viewers.length)viewers.pop().dispose();}
+
+class Viewer{
+  constructor(el,{pick}={}){
+    this.el=el;this.items=[];this.pick=pick;
+    this.scene=new THREE.Scene();this.scene.background=new THREE.Color(0x23262d);
+    this.root=new THREE.Group();this.root.rotation.x=-Math.PI/2;this.scene.add(this.root); // Z-up -> Y-up
+    this.cam=new THREE.PerspectiveCamera(45,1,.1,1000);
+    this.r=new THREE.WebGLRenderer({antialias:true});this.r.setPixelRatio(devicePixelRatio);this.r.outputEncoding=THREE.sRGBEncoding;
+    el.append(this.r.domElement);
+    this.ctl=new THREE.OrbitControls(this.cam,this.r.domElement);
+    this.scene.add(new THREE.HemisphereLight(0xffffff,0x555566,1.0));
+    this.dl=new THREE.DirectionalLight(0xffffff,.9);this.scene.add(this.dl);
+    this.ray=new THREE.Raycaster();
+    const dom=this.r.domElement;let down=null;
+    dom.addEventListener('pointerdown',e=>down=[e.clientX,e.clientY]);
+    dom.addEventListener('pointerup',e=>{if(down&&Math.hypot(e.clientX-down[0],e.clientY-down[1])<4&&this.pick)this.doPick(e);down=null;});
+    this.ro=new ResizeObserver(()=>this.resize());this.ro.observe(el);this.resize();
+    const loop=()=>{this.raf=requestAnimationFrame(loop);this.dl.position.copy(this.cam.position);this.ctl.update();this.r.render(this.scene,this.cam);};loop();
+    viewers.push(this);
+  }
+  resize(){const w=this.el.clientWidth,h=this.el.clientHeight;if(!w||!h)return;this.r.setSize(w,h,false);this.cam.aspect=w/h;this.cam.updateProjectionMatrix();}
+  dispose(){cancelAnimationFrame(this.raf);this.ro.disconnect();this.r.dispose();this.r.domElement.remove();}
+  clear(){this.items.forEach(it=>{it.mesh.geometry.dispose();this.root.remove(it.mesh);});this.items=[];if(this.grid){this.scene.remove(this.grid);this.grid=null;}}
+  load(list,keepCam){
+    this.clear();
+    list.forEach((m,idx)=>{
+      const g=new THREE.BufferGeometry();
+      g.setAttribute('position',new THREE.Float32BufferAttribute(m.p,3));
+      if(m.n)g.setAttribute('normal',new THREE.Float32BufferAttribute(m.n,3));
+      if(m.uv)g.setAttribute('uv',new THREE.Float32BufferAttribute(m.uv,2));
+      g.setIndex(m.i);if(!m.n)g.computeVertexNormals();
+      const mats=(m.mats.length?m.mats:['']).map(h=>this.mkMat(m,h));
+      if(m.atoms&&m.atoms.length&&m.mats.length)m.atoms.forEach(a=>g.addGroup(a[2],a[1]*3,Math.min(a[4],mats.length-1)));
+      const mesh=new THREE.Mesh(g,m.atoms&&m.mats.length?mats:mats[0]);
+      mesh.userData.idx=idx;this.root.add(mesh);this.items.push({mesh,mats,data:m});
+    });
+    this.applyFlags();
+    this.box=new THREE.Box3().setFromObject(this.root);
+    if(!keepCam)this.fit();
+  }
+  mkMat(m,h){
+    const t=m.tex&&m.tex[h];const nmx=(t&&t.name)||'';
+    const mat=new THREE.MeshStandardMaterial({color:0xc8ccd2,roughness:.7,metalness:.15,side:THREE.DoubleSide});
+    if(/contour|indicator|^hud_/.test(nmx)||(m.tex&&Object.keys(m.tex).length&&!t))mat.visible=false;
+    if(/glass/.test(nmx)){mat.transparent=true;mat.opacity=.35;mat.depthWrite=false;}
+    if(t&&t.df){mat.userData.map=getTex(t.df,false);mat.color.set(0xffffff);}
+    if(t&&t.nm)mat.userData.nm=getTex(t.nm,true);
+    return mat;
+  }
+  applyFlags(){
+    this.items.forEach(it=>it.mats.forEach(m=>{
+      m.wireframe=flags.wire;
+      m.map=flags.tex?m.userData.map||null:null;
+      m.color.set(m.userData.map&&flags.tex?0xffffff:0xc8ccd2);
+      m.normalMap=flags.nm?m.userData.nm||null:null;
+      m.normalScale.set(1,flags.nmflip?-1:1);
+      m.needsUpdate=true;
+    }));
+  }
+  fit(){
+    const b=this.box||new THREE.Box3().setFromObject(this.root);
+    const size=b.getSize(new THREE.Vector3()),c=b.getCenter(new THREE.Vector3());
+    const rad=Math.max(size.x,size.y,size.z)||1;
+    this.cam.near=rad/1000;this.cam.far=rad*100;this.cam.updateProjectionMatrix();
+    this.cam.position.copy(c).add(new THREE.Vector3(rad*1.2,rad*.8,rad*1.2));
+    this.ctl.target.copy(c);this.ctl.update();
+    if(this.grid)this.scene.remove(this.grid);
+    this.grid=new THREE.GridHelper(rad*2,20,0x555a66,0x333740);this.grid.position.set(c.x,b.min.y,c.z);this.scene.add(this.grid);
+  }
+  doPick(e){
+    const r=this.r.domElement.getBoundingClientRect();
+    this.ray.setFromCamera(new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1),this.cam);
+    const hit=this.ray.intersectObjects(this.items.filter(it=>it.mesh.visible).map(it=>it.mesh)).find(h=>{
+      const mm=h.object.material;if(!Array.isArray(mm))return mm.visible;
+      const gi=h.face&&mm[h.face.materialIndex];return !gi||gi.visible;});
+    this.pick(hit?hit.object.userData.idx:-1);
+  }
+  highlight(idx){this.items.forEach((it,i)=>it.mats.forEach(m=>m.emissive.set(i===idx?0x663300:0x000000)));}
+}
+
+let v1=null,v2=null,cur=null,curMeshes=[];
+function setFlag(k,v){flags[k]=v;viewers.forEach(x=>x.applyFlags());}
+function toolbar(extra){
+  tools.innerHTML=`<label><input type="checkbox" id="fwf"> Drahtgitter</label> <label><input type="checkbox" id="ftx" checked> Texturen</label>
+  <label><input type="checkbox" id="fnm" checked> Normal Maps</label> <label title="Gruene Normalmap-Achse umkehren"><input type="checkbox" id="fny" checked> Normal-Y invertiert</label>
+  <button id="ffit">Ansicht</button> <span id="stat" style="color:var(--dim)"></span>${extra||''}`;
+  $('#fwf').onchange=e=>setFlag('wire',e.target.checked);$('#ftx').onchange=e=>setFlag('tex',e.target.checked);
+  $('#fnm').onchange=e=>setFlag('nm',e.target.checked);$('#fny').onchange=e=>setFlag('nmflip',e.target.checked);
+  $('#ffit').onclick=()=>v1&&v1.fit();
+}
+function stat(meshes){
+  let tris=0;meshes.forEach(m=>tris+=m.i.length/3);
+  const b=v1.box,s=b.getSize(new THREE.Vector3());
+  $('#stat').textContent=`${meshes.length} Teile, ${tris} Dreiecke, ${s.x.toFixed(0)} x ${s.z.toFixed(0)} x ${s.y.toFixed(0)}`;
+}
+function startViews(meshes,keepCam){
+  curMeshes=meshes;msg.style.display='none';
+  if(!v1||!viewers.includes(v1)){v1=new Viewer(pane1,{pick:selectMesh});}
+  v1.load(meshes,keepCam);
+  if(!keepCam){stat(meshes);}else stat(meshes);
+  fillSelect();
+  if(cur!=null&&meshes[cur])selectMesh(cur,true);else selectMesh(-1);
+}
+function fillSelect(){
+  const s=$('#p2sel');s.innerHTML='<option value="-1">- Teil waehlen -</option>'+curMeshes.map((m,i)=>`<option value="${i}">${esc((m.part?m.part.replace(/^wpn_fps_\w+?_(?=[a-z]+_)/,'')+' / ':'')+m.oname)}</option>`).join('');
+  s.onchange=()=>selectMesh(+s.value);
+}
+$('#p2close').onclick=()=>selectMesh(-1);
+function selectMesh(idx,keep){
+  cur=idx>=0?idx:null;
+  if(v1)v1.highlight(idx);
+  $('#p2sel').value=String(idx);
+  if(idx<0){pane2.style.display='none';if(v2){viewers.splice(viewers.indexOf(v2),1);v2.dispose();v2=null;}return;}
+  pane2.style.display='flex';
+  const m=curMeshes[idx];
+  if(!v2){v2=new Viewer($('#v2'));}
+  v2.load([m],false);
+  showInfo(m);
+}
+const uiCache={};
+async function showInfo(m){
+  const box=$('#info');
+  const b=new THREE.Box3().setFromObject(v2.root),sz=b.getSize(new THREE.Vector3());
+  const n=m.p.length/3;
+  const fmt=a=>a.map(x=>x.toFixed(2)).join(', ');
+  let h=`<h4>Objekt</h4><table>
+   <tr><th>Name</th><td>${esc(m.oname)}</td></tr><tr><th>Hash</th><td>${m.hash}</td></tr><tr><th>Section-ID</th><td>${m.sid}</td></tr>
+   ${m.part?`<tr><th>Waffenteil</th><td>${esc(m.part)}</td></tr><tr><th>Typ / Anker</th><td>${esc(m.ptype||'-')} / ${esc(m.a_obj||'-')}</td></tr>`:''}
+   <tr><th>Unit</th><td>${esc(m.unit||'-')}</td></tr></table>
+   <h4>Geometrie</h4><table>
+   <tr><th>Vertices</th><td>${n}</td></tr><tr><th>Dreiecke</th><td>${m.i.length/3}</td></tr>
+   <tr><th>Groesse (x,y,z)</th><td>${fmt([sz.x,sz.z,sz.y])}</td></tr>
+   <tr><th>Min</th><td>${fmt([b.min.x,-b.max.z,b.min.y])}</td></tr><tr><th>Max</th><td>${fmt([b.max.x,-b.min.z,b.max.y])}</td></tr>
+   <tr><th>Normalen / UV</th><td>${m.has_n?'ja':'nein (berechnet)'} / ${m.has_uv?'ja':'nein'}</td></tr></table>
+   <h4>Render-Atome</h4><table><tr><th>#</th><th>BaseVertex</th><th>Dreiecke</th><th>BaseIndex</th><th>Vertices</th><th>Material</th></tr>
+   ${(m.atoms||[]).map((a,i)=>`<tr><td>${i}</td><td>${a[0]}</td><td>${a[1]}</td><td>${a[2]}</td><td>${a[3]}</td><td>${a[4]} (${m.mats[a[4]]||'-'})</td></tr>`).join('')}</table>
+   <div id="uinfo" style="color:var(--dim);margin-top:8px">Lade Unit-Daten ...</div>`;
+  box.innerHTML=h;box.scrollTop=0;
+  if(!m.unit)return;
+  if(!uiCache[m.unit])uiCache[m.unit]=await (await fetch('/api/unitinfo?unit='+encodeURIComponent(m.unit))).json();
+  const u=uiCache[m.unit];if(cur==null||curMeshes[cur]!==m)return;
+  const mine=new Set(m.mats);
+  let x=`<h4>Materialien (${u.materials.length} in der material_config)</h4>`;
+  for(const ma of u.materials){
+    x+=`<div style="margin:6px 0;${mine.has(ma.hash)?'':'opacity:.5'}"><b>${esc(ma.name)}</b> ${mine.has(ma.hash)?'<span style="color:var(--acc)">(genutzt)</span>':''}<br><span style="color:var(--dim)">${esc(ma.template)}</span><table>`;
+    for(const t of ma.textures)x+=`<tr><th>${esc(t.slot)}</th><td>${t.id?`<img src="/api/texture/${t.id}?c=rgb&s=128">`:''}${esc(t.path)}${t.id?` <a href="#" data-tex="${t.id}" data-p="${esc(t.path)}">oeffnen</a>`:''}</td></tr>`;
+    x+='</table></div>';
+  }
+  x+=`<h4>Dateien dieser Unit</h4><table>${u.files.map(f=>`<tr><th>${esc(f.ext)}</th><td>ID ${f.id}</td><td>${f.size==null?'-':f.size+' B'}</td><td>${f.size!=null?`<a href="/api/raw/${f.id}">Rohdaten</a>`:''}</td></tr>`).join('')}</table>`;
+  if(u.unit_xml)x+=`<h4>Unit-XML</h4><details><summary>anzeigen</summary><pre>${esc(u.unit_xml)}</pre></details>`;
+  if(u.material_xml)x+=`<h4>Material-Config</h4><details><summary>anzeigen</summary><pre>${esc(u.material_xml)}</pre></details>`;
+  $('#uinfo').outerHTML=x;
+  $('#info').querySelectorAll('a[data-tex]').forEach(a=>a.onclick=e=>{e.preventDefault();window.open('/?t='+a.dataset.tex+'&p='+encodeURIComponent(a.dataset.p),'_blank');});
+}
+
+/* ---------- Modell ---------- */
+async function showModel(id,p){
+  msg.textContent='Lade ...';cur=null;
+  const r=await fetch('/api/model/'+id);
+  if(!r.ok){msg.textContent=await r.text();return;}
+  const d=await r.json();
+  if(!d.meshes.length){msg.textContent='Keine Geometrie in diesem Modell';return;}
+  d.meshes.forEach(m=>m.tex=d.tex);
+  toolbar(` <a href="/api/raw/${id}">.model</a>`);
+  startViews(d.meshes,false);
+}
+
+/* ---------- Waffe ---------- */
+let wname=null,winfo=null,wsel={};
+async function showWeapon(name){
+  wname=name;cur=null;msg.textContent='Baue Waffe zusammen ...';
+  winfo=await (await fetch('/api/weaponinfo/'+name)).json();
+  wsel={};
+  for(const [slot,opts] of Object.entries(winfo.slots)){
+    const d=opts.find(o=>winfo.default.includes(o.part));wsel[slot]=d?d.part:'';
+  }
+  toolbar();buildCfg();
+  await loadWeapon(false);
+}
+function buildCfg(){
+  cfg.style.display='flex';cfg.innerHTML='';
+  for(const [slot,opts] of Object.entries(winfo.slots)){
+    const [type,a]=slot.split('|');
+    const lab=document.createElement('label');lab.append(type+(a?' ('+a+')':'')+':');
+    const sel=document.createElement('select');
+    sel.innerHTML='<option value="">- keins -</option>'+opts.map(o=>`<option value="${o.part}" title="${esc(o.part)}">${esc(o.part.replace(/^wpn_fps_\w+?_(?=[a-z])/,'').replace(/^[a-z]+_/,'')||o.part)}${winfo.default.includes(o.part)?' *':''}</option>`).join('');
+    sel.value=wsel[slot];sel.onchange=()=>{wsel[slot]=sel.value;loadWeapon(true);};
+    lab.append(sel);cfg.append(lab);
+  }
+  const rb=document.createElement('button');rb.textContent='Standard';
+  rb.onclick=()=>{for(const [slot,opts] of Object.entries(winfo.slots)){const d=opts.find(o=>winfo.default.includes(o.part));wsel[slot]=d?d.part:'';}buildCfg();loadWeapon(true);};
+  cfg.append(rb);
+}
+async function loadWeapon(keep){
+  const bp=Object.values(wsel).filter(Boolean);
+  const r=await fetch('/api/weapon/'+wname+'?bp='+bp.join(','));
+  if(!r.ok){msg.textContent=await r.text();return;}
+  const d=await r.json();
+  d.meshes=d.meshes.filter(m=>m.part!=='base');
+  d.meshes.forEach(m=>m.tex=m.mc);
+  const selKey=cur!=null&&curMeshes[cur]?curMeshes[cur].part+'/'+curMeshes[cur].hash:null;
+  curMeshes=d.meshes;
+  const i=selKey?d.meshes.findIndex(m=>m.part+'/'+m.hash===selKey):-1;
+  cur=i>=0?i:null;
+  startViews(d.meshes,keep);
+  if(d.missing.length)$('#stat').textContent+=' | fehlt: '+d.missing.join(', ');
+}
+
+$('#bt').onclick=()=>tab('texture','#bt');$('#bm').onclick=()=>tab('model','#bm');$('#bw').onclick=()=>tab('weapon','#bw');
+function tab(k,btn){kind=k;['#bt','#bm','#bw'].forEach(x=>$(x).classList.remove('on'));$(btn).classList.add('on');load(k);}
+$('#q').onkeydown=e=>{if(e.key==='Enter'){filter=e.target.value.trim();render();}};
+load(kind);
+{const q=new URLSearchParams(location.search);
+ if(q.get('w')){tab('weapon','#bw');$('#title').textContent=q.get('w');clearView();showWeapon(q.get('w'));}
+ else if(q.get('m')){tab('model','#bm');clearView();showModel(q.get('m'));}
+ else if(q.get('t')){kind='texture';$('#title').textContent=q.get('p')||'';clearView();showTex(q.get('t'),'');}}
+</script></body></html>

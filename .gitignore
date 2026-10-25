@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+# generierte Listen (aus hashlist.txt + bundle_db.blb neu erzeugbar)
+paths.txt
+unresolved.txt
+hashmap.tsv
+hashlist_github.txt
+wf.lua
