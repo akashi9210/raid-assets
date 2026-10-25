@@ -89,5 +89,9 @@ class Db:
         if single:
             with open(ASSETS + name + '.bundle', 'rb') as f:
                 f.seek(a)
-                return zlib.decompress(f.read(l))
+                raw = f.read(l)
+            try:
+                return zlib.decompress(raw)
+            except zlib.error:
+                return raw  # kleine Dateien liegen unkomprimiert vor
         return self.bundle(name)[a:a + l]

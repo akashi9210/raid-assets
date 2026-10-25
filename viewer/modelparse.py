@@ -76,6 +76,7 @@ def parse_model(b):
     sec = sections(b)
     world = {}
     local = {}
+    amp = {}
     for sid, (t, o, sz) in sec.items():
         if t in (T_OBJ3D, T_MODEL):
             m, p, _ = parse_obj3d(b, o)
@@ -90,6 +91,16 @@ def parse_model(b):
                         m[3, :3] = struct.unpack_from('<3f', b, co + 24 + 4)
                     break
             local[sid] = (m, p)
+            a = np.zeros(3)
+            for k in range(cc):
+                cid, = struct.unpack_from('<I', b, o + 12 + k * 12)
+                if cid in sec and sec[cid][0] == T_VEC3CTRL:
+                    co = sec[cid][1]
+                    n, = struct.unpack_from('<I', b, co + 20)
+                    if n:
+                        kf = np.frombuffer(b[co + 24:co + 24 + n * 16], '<f4').reshape(n, 4)
+                        a = np.maximum(a, np.abs(kf[:, 1:]).max(0))
+            amp[sid] = a
 
     def wm(sid, depth=0):
         if sid in world:
@@ -100,9 +111,17 @@ def parse_model(b):
         return r
 
     objects = {}
+    obj_amp = {}
+
+    def chain_amp(sid, depth=0):
+        m, p = local[sid]
+        return amp.get(sid, 0) + (chain_amp(p, depth + 1) if p in local and depth < 64 else 0)
+
     for sid, (t, o, sz) in sec.items():
         if t in (T_OBJ3D, T_MODEL):
-            objects[struct.unpack_from('<Q', b, o)[0]] = wm(sid)
+            hh = struct.unpack_from('<Q', b, o)[0]
+            objects[hh] = wm(sid)
+            obj_amp[hh] = chain_amp(sid)
     matname = {sid: struct.unpack_from('<Q', b, o)[0] for sid, (t, o, sz) in sec.items() if t == T_MAT}
     meshes = []
     for sid, (t, o, sz) in sec.items():
@@ -130,7 +149,9 @@ def parse_model(b):
             n, = struct.unpack_from('<I', b, sec[mg][1])
             mats = [matname.get(x, 0) for x in struct.unpack_from('<%dI' % n, b, sec[mg][1] + 4)]
         meshes.append({'geo': geo, 'idx': idx, 'atoms': atoms, 'm': wm(sid), 'mats': mats, 'hash': struct.unpack_from('<Q', b, o)[0], 'sid': sid})
-    return {'meshes': meshes, 'objects': objects}
+    roots = [sid for sid, (m, p) in local.items() if p == 0 or p not in local]
+    root = wm(min(roots)) if roots else np.eye(4, dtype='f4')
+    return {'meshes': meshes, 'objects': objects, 'amp': obj_amp, 'root': root}
 
 
 def to_json(meshes, xf=None, names=None):

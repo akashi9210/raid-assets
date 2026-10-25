@@ -97,7 +97,7 @@ function render(){
     for(const [id,name,p] of n.f.sort((a,b)=>a[1]<b[1]?-1:1)){
       const row=document.createElement('div');row.className='row';row.style.paddingLeft=depth*14+4+'px';
       row.textContent=name;row.title=p;
-      row.onclick=()=>{document.querySelectorAll('.sel').forEach(e=>e.classList.remove('sel'));row.classList.add('sel');show(id,p);};
+      row.onclick=()=>{document.querySelectorAll('.sel').forEach(e=>e.classList.remove('sel'));row.classList.add('sel');copyText=kind==='weapon'?String(id):p;show(id,p);};
       el.append(row);
     }
   })(root,$('#tree'),0);
@@ -108,6 +108,17 @@ function clearView(){
   pane2.style.display='none';msg.textContent='';msg.style.display='flex';
 }
 function show(id,p){$('#title').textContent=p;clearView();kind==='texture'?showTex(id,p):kind==='weapon'?showWeapon(id):showModel(id,p);}
+
+/* Strg+C kopiert den Namen des gewaehlten Listeneintrags (Waffe: wpn_fps_..., sonst voller Pfad) */
+let copyText='';
+addEventListener('keydown',e=>{
+  if(!(e.ctrlKey||e.metaKey)||e.key.toLowerCase()!=='c'||!copyText)return;
+  if(String(getSelection()).length||/INPUT|TEXTAREA/.test(document.activeElement.tagName))return;
+  const done=()=>{const t=$('#title'),old=t.textContent;t.textContent='Kopiert: '+copyText;setTimeout(()=>{if(t.textContent.startsWith('Kopiert: '))t.textContent=old;},1200);};
+  if(navigator.clipboard)navigator.clipboard.writeText(copyText).then(done,()=>{});
+  else{const a=document.createElement('textarea');a.value=copyText;document.body.append(a);a.select();document.execCommand('copy');a.remove();done();}
+  e.preventDefault();
+});
 
 /* ---------- Textur ---------- */
 let img=null,zoom=1,chan='rgba';
@@ -380,9 +391,9 @@ async function showModel(id,p){
 }
 
 /* ---------- Waffe ---------- */
-let wname=null,winfo=null,wsel={};
-async function showWeapon(name){
-  wname=name;cur=null;msg.textContent='Baue Waffe zusammen ...';
+let wname=null,winfo=null,wsel={},wskin='';
+async function showWeapon(name,skin){
+  wname=name;cur=null;wskin=skin||'';msg.textContent='Baue Waffe zusammen ...';
   winfo=await (await fetch('/api/weaponinfo/'+name)).json();
   wsel={};
   for(const [slot,opts] of Object.entries(winfo.slots)){
@@ -401,13 +412,27 @@ function buildCfg(){
     sel.value=wsel[slot];sel.onchange=()=>{wsel[slot]=sel.value;loadWeapon(true);};
     lab.append(sel);cfg.append(lab);
   }
+  if(winfo.skins&&winfo.skins.length){
+    const lab=document.createElement('label');lab.append('Skin:');
+    const sel=document.createElement('select');
+    sel.innerHTML='<option value="">Standard</option>'+winfo.skins.map(s=>`<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
+    sel.value=wskin;sel.onchange=()=>{wskin=sel.value;loadWeapon(true);};
+    lab.append(sel);cfg.prepend(lab);
+  }
+  const eb=document.createElement('button');eb.textContent='Diffuse exportieren';
+  eb.title='Alle Diffuse-Texturen dieser Waffe samt Aufsaetzen (fps + third) nach raid-assets/export/';
+  eb.onclick=async()=>{eb.disabled=true;eb.textContent='Exportiere ...';
+    const r=await fetch('/api/export/'+wname);const d=r.ok?await r.json():null;
+    eb.disabled=false;eb.textContent='Diffuse exportieren';
+    toast(d?d.count+' Texturen -> '+d.dir:'Export fehlgeschlagen: '+await r.text());};
+  cfg.append(eb);
   const rb=document.createElement('button');rb.textContent='Standard';
   rb.onclick=()=>{for(const [slot,opts] of Object.entries(winfo.slots)){const d=opts.find(o=>winfo.default.includes(o.part));wsel[slot]=d?d.part:'';}buildCfg();loadWeapon(true);};
   cfg.append(rb);
 }
 async function loadWeapon(keep){
   const bp=Object.values(wsel).filter(Boolean);
-  const r=await fetch('/api/weapon/'+wname+'?bp='+bp.join(','));
+  const r=await fetch('/api/weapon/'+wname+'?bp='+bp.join(',')+'&skin='+encodeURIComponent(wskin));
   if(!r.ok){msg.textContent=await r.text();return;}
   const d=await r.json();
   d.meshes=d.meshes.filter(m=>m.part!=='base');
@@ -425,7 +450,7 @@ function tab(k,btn){kind=k;['#bt','#bm','#bw'].forEach(x=>$(x).classList.remove(
 $('#q').onkeydown=e=>{if(e.key==='Enter'){filter=e.target.value.trim();render();}};
 load(kind);
 {const q=new URLSearchParams(location.search);
- if(q.get('w')){tab('weapon','#bw');$('#title').textContent=q.get('w');clearView();showWeapon(q.get('w'));}
+ if(q.get('w')){tab('weapon','#bw');$('#title').textContent=q.get('w');clearView();showWeapon(q.get('w'),q.get('skin'));}
  else if(q.get('m')){tab('model','#bm');clearView();showModel(q.get('m'));}
  else if(q.get('t')){kind='texture';$('#title').textContent=q.get('p')||'';clearView();showTex(q.get('t'),'');}}
 </script></body></html>

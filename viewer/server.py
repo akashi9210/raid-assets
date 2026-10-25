@@ -26,6 +26,24 @@ BYP = {}
 for _i, _e in db.entries.items():
     BYP.setdefault(_e[1], {})[_e[0]] = _i
 _mc = {}
+_dirmc = {}
+
+
+def mc_id(unit):
+    """ID der material_config einer Unit; ohne eigene die gemeinsame im selben Ordner (z.B. georg_parts_fps)."""
+    u = BYP.get(unit, {})
+    if 'material_config' in u and u['material_config'] in db.loc:
+        return u['material_config']
+    d = unit.rsplit('/', 1)[0]
+    if d not in _dirmc:
+        _dirmc[d] = [(p, v['material_config']) for p, v in BYP.items()
+                     if p.startswith(d + '/') and '/' not in p[len(d) + 1:] and 'material_config' in v and v['material_config'] in db.loc]
+    c = _dirmc[d]
+    if not c:
+        return None
+    tag = 'fps' if unit.endswith('fps') else 'tps' if unit.endswith('tps') else ''
+    m = [x for x in c if tag and x[0].endswith(tag)] or c
+    return m[0][1] if len(m) == 1 or tag else None
 
 
 def mc_tex(unit):
@@ -33,10 +51,10 @@ def mc_tex(unit):
     if unit in _mc:
         return _mc[unit]
     out = {}
-    u = BYP.get(unit, {})
-    if 'material_config' in u and u['material_config'] in db.loc:
+    mid = mc_id(unit)
+    if mid is not None:
         with lock:
-            xml = db.get(u['material_config']).decode('utf-8', 'replace')
+            xml = db.get(mid).decode('utf-8', 'replace')
         for m in re.finditer(r'<material\s+([^>]*?)>(.*?)</material>', xml, re.S):
             nm = re.search(r'\bname="([^"]+)"', m[1])
             if not nm:
@@ -56,6 +74,18 @@ def mc_tex(unit):
 
 WEAPONS = Weapons(db, BYP, mc_tex)
 
+# Mod-Skins: modskins.json -> eigene DDS-Dateien als Texturen mit ids ab 9000001
+MODTEX = {}
+_mf = os.path.join(HERE, 'modskins.json')
+if os.path.exists(_mf):
+    for _s in json.load(open(_mf))['skins']:
+        _map = {}
+        for _orig, _file in _s['replace'].items():
+            _id = 9000001 + len(MODTEX)
+            MODTEX[_id] = os.path.join(os.path.expanduser(_s['dir']), _file)
+            _map[int(_orig)] = _id
+        WEAPONS.modskins.setdefault(_s['weapon'], []).append({'id': _s['id'], 'label': _s['label'], 'map': _map})
+
 
 def unit_info(unit):
     u = BYP.get(unit, {})
@@ -65,8 +95,9 @@ def unit_info(unit):
     with lock:
         if 'unit' in u and u['unit'] in db.loc:
             out['unit_xml'] = db.get(u['unit']).decode('utf-8', 'replace')
-        if 'material_config' in u and u['material_config'] in db.loc:
-            xml = db.get(u['material_config']).decode('utf-8', 'replace')
+        mid = mc_id(unit)
+        if mid is not None:
+            xml = db.get(mid).decode('utf-8', 'replace')
             out['material_xml'] = xml
             for m in re.finditer(r'<material\s+([^>]*?)>(.*?)</material>', xml, re.S):
                 nm = re.search(r'\bname="([^"]+)"', m[1])
@@ -80,8 +111,11 @@ def unit_info(unit):
 
 
 def texture_png(i, chan, maxs=2048):
-    with lock:
-        raw = db.get(i)
+    if i in MODTEX:
+        raw = open(MODTEX[i], 'rb').read()
+    else:
+        with lock:
+            raw = db.get(i)
     im = Image.open(io.BytesIO(raw))
     im.load()
     w, h = im.size
@@ -100,6 +134,41 @@ def texture_png(i, chan, maxs=2048):
     buf = io.BytesIO()
     im.save(buf, 'PNG')
     return buf.getvalue(), info
+
+
+def export_diffuse(name):
+    """Alle Diffuse-Texturen einer Waffe (Basis, alle Aufsaetze, fps + third, Skin-Varianten) als PNG nach ../export/<waffe>/."""
+    info = WEAPONS.info(name)
+    units = [info['unit']]
+    for opts in info['slots'].values():
+        for o in opts:
+            units.append(o['unit'])
+            tu = WEAPONS.parts.get(o['part'], {}).get('third_unit')
+            if tu:
+                units.append(tu)
+    units += [u.replace('wpn_fps_', 'wpn_third_') for u in list(units)]
+    ids = {}
+    for u in dict.fromkeys(units):
+        if u in BYP:
+            for t in mc_tex(u).values():
+                if t.get('df') is not None:
+                    ids[t['df']] = None
+    for p in WEAPONS.parts.values():   # Skin-Varianten
+        for mt in (p.get('materials_fps') or {}).values():
+            tid = BYP.get(mt.get('diffuse_texture'), {}).get('texture') if isinstance(mt, dict) else None
+            if tid in db.loc and p.get('clone_of', '').startswith(name):
+                ids[tid] = None
+    out = os.path.join(HERE, '..', 'export', name)
+    os.makedirs(out, exist_ok=True)
+    files = []
+    for i in ids:
+        path = db.entries[i][1]
+        fn = os.path.basename(path) + '.png'
+        png, _ = texture_png(i, 'rgba', 99999)
+        with open(os.path.join(out, fn), 'wb') as f:
+            f.write(png)
+        files.append(fn)
+    return {'dir': os.path.normpath(out), 'count': len(files), 'files': sorted(files)}
 
 
 class H(BaseHTTPRequestHandler):
@@ -144,6 +213,11 @@ class H(BaseHTTPRequestHandler):
                 for j in ms:
                     j['unit'] = unit
                 return self.send(200, json.dumps({'meshes': ms, 'tex': mc_tex(unit)}).encode(), 'application/json')
+            m = re.fullmatch(r'/api/export/(\w+)', p)
+            if m:
+                with lock:
+                    res = export_diffuse(m[1])
+                return self.send(200, json.dumps(res).encode(), 'application/json')
             if p == '/api/weapons':
                 return self.send(200, json.dumps(WEAPONS.names()).encode(), 'application/json')
             m = re.fullmatch(r'/api/weaponinfo/(\w+)', p)
@@ -156,8 +230,9 @@ class H(BaseHTTPRequestHandler):
             m = re.fullmatch(r'/api/weapon/(\w+)', p)
             if m:
                 bp = re.search(r'bp=([^&]*)', q)
+                sk = re.search(r'skin=(\w*)', q)
                 with lock:
-                    res = WEAPONS.assemble(m[1], [x for x in bp[1].split(',') if x] if bp else None)
+                    res = WEAPONS.assemble(m[1], [x for x in bp[1].split(',') if x] if bp else None, sk[1] if sk and sk[1] else None)
                 return self.send(200, json.dumps(res).encode(), 'application/json')
             m = re.fullmatch(r'/api/raw/(\d+)', p)
             if m:
