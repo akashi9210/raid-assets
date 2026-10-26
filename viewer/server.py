@@ -16,6 +16,11 @@ print("Bereit:", len(db.loc), "Dateien", flush=True)
 
 
 def listing(ext):
+    if ext == 'tool':   # Granaten, Nahkampf, Equipment: fps-Einzelmodelle
+        out = [[i, e[1]] for i, e in db.entries.items()
+               if e[0] == 'model' and i in db.loc and TOOL_RE.match(e[1]) and not TOOL_SKIP.search(e[1])]
+        out.sort(key=lambda x: x[1])
+        return out
     out = [[i, e[1]] for i, e in db.entries.items() if e[0] == ext and i in db.loc]
     out.sort(key=lambda x: x[1])
     return out
@@ -23,6 +28,8 @@ def listing(ext):
 
 LISTS = {}
 BYP = {}
+TOOL_RE = re.compile(r'^units/[\w]+/(?:weapons|equipment)/.*/(?:wpn_\w*?_?(?:gre|mel)_\w+|equip_\w+)$')
+TOOL_SKIP = re.compile(r'_(?:hand|husk|tps|third|npc)\b|wpn_(?:tps|third)_|_pts/')
 for _i, _e in db.entries.items():
     BYP.setdefault(_e[1], {})[_e[0]] = _i
 _mc = {}
@@ -192,7 +199,7 @@ class H(BaseHTTPRequestHandler):
             m = re.fullmatch(r'/static/([\w.]+)', p)
             if m:
                 return self.send(200, open(os.path.join(HERE, 'static', m[1]), 'rb').read(), 'text/javascript')
-            m = re.fullmatch(r'/api/list/(texture|model)', p)
+            m = re.fullmatch(r'/api/list/(texture|model|tool)', p)
             if m:
                 if m[1] not in LISTS:
                     LISTS[m[1]] = json.dumps(listing(m[1])).encode()
@@ -212,7 +219,11 @@ class H(BaseHTTPRequestHandler):
                 unit = db.entries[mid][1]
                 for j in ms:
                     j['unit'] = unit
-                return self.send(200, json.dumps({'meshes': ms, 'tex': mc_tex(unit)}).encode(), 'application/json')
+                tex = mc_tex(unit)
+                if 'clean=1' in q:   # Tools: Platzhalterboxen und Schattenmeshes ausblenden
+                    clean = [j for j in ms if any((tex.get(h) or {}).get('name', 'lambert1') not in ('lambert1', 'shadow_caster') for h in j['mats'])]
+                    ms = clean or ms
+                return self.send(200, json.dumps({'meshes': ms, 'tex': tex}).encode(), 'application/json')
             m = re.fullmatch(r'/api/export/(\w+)', p)
             if m:
                 with lock:

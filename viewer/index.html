@@ -43,7 +43,7 @@ a{color:var(--acc)}
 #p2bar select{flex:1;min-width:0}
 </style></head><body>
 <div id="side">
- <div id="bar"><button id="bt" class="on">Texturen</button><button id="bm">Modelle</button><button id="bw">Waffen</button></div>
+ <div id="bar"><button id="bt" class="on">Texturen</button><button id="bm">Modelle</button><button id="bw">Waffen</button><button id="bk">Tools</button></div>
  <input id="q" placeholder="Suchen (z.B. kubelwagen)  -  Enter">
  <div id="cnt"></div><div id="tree"></div>
 </div>
@@ -59,7 +59,7 @@ a{color:var(--acc)}
 <script src="/static/OrbitControls.js"></script>
 <script>
 const $=s=>document.querySelector(s);
-let kind='texture',data={texture:null,model:null,weapon:null},filter='';
+let kind='texture',data={texture:null,model:null,weapon:null,tool:null},filter='';
 const pane1=$('#pane1'),msg=$('#msg'),tools=$('#tools'),cfg=$('#cfg'),pane2=$('#pane2');
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
@@ -107,7 +107,7 @@ function clearView(){
   stopViewers();pane1.querySelectorAll('img.tex,canvas').forEach(e=>e.remove());tools.innerHTML='';cfg.style.display='none';cfg.innerHTML='';
   pane2.style.display='none';msg.textContent='';msg.style.display='flex';
 }
-function show(id,p){$('#title').textContent=p;clearView();kind==='texture'?showTex(id,p):kind==='weapon'?showWeapon(id):showModel(id,p);}
+function show(id,p){$('#title').textContent=p;clearView();kind==='texture'?showTex(id,p):kind==='weapon'?showWeapon(id):showModel(id,p);}  // Tools: Einzelmodelle
 
 /* Strg+C kopiert den Namen des gewaehlten Listeneintrags (Waffe: wpn_fps_..., sonst voller Pfad) */
 let copyText='';
@@ -381,7 +381,7 @@ async function showInfo(m){
 /* ---------- Modell ---------- */
 async function showModel(id,p){
   msg.textContent='Lade ...';cur=null;
-  const r=await fetch('/api/model/'+id);
+  const r=await fetch('/api/model/'+id+(kind==='tool'?'?clean=1':''));
   if(!r.ok){msg.textContent=await r.text();return;}
   const d=await r.json();
   if(!d.meshes.length){msg.textContent='Keine Geometrie in diesem Modell';return;}
@@ -445,8 +445,8 @@ async function loadWeapon(keep){
   if(d.missing.length)$('#stat').textContent+=' | fehlt: '+d.missing.join(', ');
 }
 
-$('#bt').onclick=()=>tab('texture','#bt');$('#bm').onclick=()=>tab('model','#bm');$('#bw').onclick=()=>tab('weapon','#bw');
-function tab(k,btn){kind=k;['#bt','#bm','#bw'].forEach(x=>$(x).classList.remove('on'));$(btn).classList.add('on');load(k);}
+$('#bt').onclick=()=>tab('texture','#bt');$('#bm').onclick=()=>tab('model','#bm');$('#bw').onclick=()=>tab('weapon','#bw');$('#bk').onclick=()=>tab('tool','#bk');
+function tab(k,btn){kind=k;['#bt','#bm','#bw','#bk'].forEach(x=>$(x).classList.remove('on'));$(btn).classList.add('on');load(k);}
 $('#q').onkeydown=e=>{if(e.key==='Enter'){filter=e.target.value.trim();render();}};
 load(kind);
 {const q=new URLSearchParams(location.search);
