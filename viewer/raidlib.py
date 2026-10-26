@@ -2,7 +2,39 @@
 import os, struct, zlib, glob, collections
 from hash64 import hash64
 
-ASSETS = "/home/akashi/.local/share/Steam/steamapps/common/RAID World War II/assets/"
+GAME_DIR = os.path.join("steamapps", "common", "RAID World War II", "assets")
+
+
+def find_assets():
+    """RAID_ASSETS, sonst Steam-Libraries (libraryfolders.vdf) durchsuchen."""
+    env = os.environ.get("RAID_ASSETS")
+    if env:
+        return os.path.join(os.path.expanduser(env), "")
+    roots = [os.path.expanduser(p) for p in ("~/.local/share/Steam", "~/.steam/steam", "~/.steam/root")]
+    if os.name == "nt":
+        roots = [os.environ.get(v, "") + "\\Steam" for v in ("ProgramFiles(x86)", "ProgramFiles")]
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k:
+                roots.insert(0, winreg.QueryValueEx(k, "SteamPath")[0])
+        except OSError:
+            pass
+    for r in list(roots):
+        try:
+            for line in open(os.path.join(r, "steamapps", "libraryfolders.vdf"), encoding="utf-8", errors="replace"):
+                p = line.split('"')
+                if len(p) >= 4 and p[1] == "path":
+                    roots.append(p[3].replace("\\\\", "\\"))
+        except OSError:
+            pass
+    for r in roots:
+        p = os.path.join(r, GAME_DIR)
+        if os.path.isdir(p):
+            return os.path.join(p, "")
+    raise SystemExit("RAID-Assets nicht gefunden. Pfad per RAID_ASSETS=<.../RAID World War II/assets> setzen.")
+
+
+ASSETS = find_assets()
 PROJ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -29,7 +61,7 @@ def read_blocks(path):
 
 class Db:
     def __init__(self):
-        hl = [l.strip() for l in open(os.path.join(PROJ, 'hashlist.txt')) if l.strip()]
+        hl = [l.strip() for l in open(os.path.join(PROJ, 'hashlist.txt'), encoding='utf-8', errors='replace') if l.strip()]
         self.names = {hash64(s): s for s in hl}
         self.exts = {hash64(s): s for s in hl if '/' not in s}
         d = open(ASSETS + 'bundle_db.blb', 'rb').read()

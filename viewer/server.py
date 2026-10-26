@@ -85,7 +85,7 @@ WEAPONS = Weapons(db, BYP, mc_tex)
 MODTEX = {}
 _mf = os.path.join(HERE, 'modskins.json')
 if os.path.exists(_mf):
-    for _s in json.load(open(_mf))['skins']:
+    for _s in json.load(open(_mf, encoding='utf-8'))['skins']:
         _map = {}
         for _orig, _file in _s['replace'].items():
             _id = 9000001 + len(MODTEX)
