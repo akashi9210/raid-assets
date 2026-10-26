@@ -55,11 +55,11 @@ def mc_tex(unit):
     if mid is not None:
         with lock:
             xml = db.get(mid).decode('utf-8', 'replace')
-        for m in re.finditer(r'<material\s+([^>]*?)>(.*?)</material>', xml, re.S):
+        for m in re.finditer(r'<material\s+([^>]*?)(?:/>|>(.*?)</material>)', xml, re.S):
             nm = re.search(r'\bname="([^"]+)"', m[1])
             if not nm:
                 continue
-            m = (None, nm[1], m[2])
+            m = (None, nm[1], m[2] or '')
             t = {'name': m[1]}
             for key, tag in (('df', 'diffuse_texture'), ('nm', 'bump_normal_texture')):
                 f = re.search(r'<%s\s+file="([^"]+)"' % tag, m[2])
@@ -99,11 +99,11 @@ def unit_info(unit):
         if mid is not None:
             xml = db.get(mid).decode('utf-8', 'replace')
             out['material_xml'] = xml
-            for m in re.finditer(r'<material\s+([^>]*?)>(.*?)</material>', xml, re.S):
+            for m in re.finditer(r'<material\s+([^>]*?)(?:/>|>(.*?)</material>)', xml, re.S):
                 nm = re.search(r'\bname="([^"]+)"', m[1])
                 rt = re.search(r'render_template="([^"]+)"', m[1])
                 texs = []
-                for t in re.finditer(r'<(\w+_texture)\s+[^>]*?file="([^"]+)"', m[2]):
+                for t in re.finditer(r'<(\w+_texture)\s+[^>]*?file="([^"]+)"', m[2] or ''):
                     texs.append({'slot': t[1], 'path': t[2], 'id': BYP.get(t[2], {}).get('texture')})
                 if nm:
                     out['materials'].append({'name': nm[1], 'hash': '%016x' % hash64(nm[1]), 'template': rt[1] if rt else '', 'textures': texs})

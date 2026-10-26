@@ -342,7 +342,10 @@ class Weapons:
         modmap = next((m['map'] for m in self.modskins.get(name, []) if m['id'] == skin), None) if skin else None
         meshes = []
         for pn, mdl, xf, unit in placed:
+            mc0 = self.tex(unit)
             for j in to_json(mdl['meshes'], xf, self.db.names):
+                if len(j['p']) // 3 <= 24 and not any((mc0.get(h) or {}).get('name', 'lambert1') != 'lambert1' for h in j['mats']):
+                    continue   # Platzhalterboxen (ohne Material oder lambert1)
                 j['part'] = pn
                 j['unit'] = unit
                 j['ptype'] = self.parts.get(pn, {}).get('type')
